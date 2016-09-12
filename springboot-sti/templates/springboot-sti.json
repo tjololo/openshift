@@ -33,7 +33,7 @@
             "source": {
                "type": "Git",
                "git": {
-                  "uri": "<git-uri>",
+                  "uri": "https://github.com/tjololo/springboot-sti.git",
                   "ref": "master"
                },
                "contextDir": "springboot-sti"
