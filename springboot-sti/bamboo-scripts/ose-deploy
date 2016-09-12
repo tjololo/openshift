@@ -1,0 +1,386 @@
+#!/bin/bash
+############
+# Required variables:
+# $USER_NAME Set by the script
+# $USER_PASSWORD Set by the script
+# $APP_NAME Set by bamboo
+# $APP_VERSION Set by bamboo
+# $APP_GIT Set by bamboo
+# $APP_GIT_REF Set by bamboo
+# $APP_GIT_CONTEXT_DIR Set by the user creating the deploytask in bamboo (relative path to pom.xml in git repo). Can be set with parameter: -d
+# $OSE_PROJECT Set by the user creating the deploy environment in bamboo (set list of project for the different environments (dev, test, etc). Can be set with parameter: -e
+############
+# Other variables:
+# $bamboo_* variables from bamboo.
+# $bamboo_API_USERNAME username to use againt the bamboo Rest-API defined as a global var in bamboo
+# $bamboo_API_PASSWORD password to use againt the bamboo Rest-API defined as a global var in bamboo
+############
+
+APP_NAME=${bamboo_planKey}
+APP_VERSION=${bamboo_deploy_version}
+APP_GIT=${bamboo_planRepository_repositoryUrl}
+APP_GIT_REF=${bamboo_planRepository_revision}
+USER_NAME=${bamboo_OSE_USERNAME}
+USER_PASSWORD=${bamboo_USER_PASSWORD}
+BAMBOO_PROJECTNAME=${bamboo_planKey}
+BAMBOO_USERNAME=${bamboo_API_USERNAME}
+BAMBOO_PASSWORD=${bamboo_API_PASSWORD}
+BAMBOO_HOST=<bamboo-uri>
+OSE_HOST=<Openshift-uri>
+
+while getopts ":d:e:h:r:p:a:n:" opt; do
+  case $opt in
+    d) APP_GIT_CONTEXT_DIR="$OPTARG"
+    ;;
+    e) OSE_PROJECT="$OPTARG"
+    ;;
+    h)
+    ;;
+    r) EXTRA_ROUTE="$OPTARG"
+    ;;
+    p) EXTRA_ROUTE_PATH="$OPTARG"
+    ;;
+    a) BAMBOO_ARTIFACT_NAME="$OPTARG"
+    ;;
+    n) CUSTOM_APP_NAME="$OPTARG"
+    ;;
+    \?) echo "Invalid option -$OPTARG" >&2
+        exit 1
+    ;;
+  esac
+done
+
+OSE_BUILD_PROJECT=image-builder
+
+BUILD_TEMPLATE_NAME="springboot-maven"
+SPRING_IMAGE_TEMPLATE="springboot-image"
+EXTERNAL_ROUTE_TEMPLATE="external-route"
+
+function exit_with_error {
+    if [ -n "$1" ]; then
+        echo "$1" >&2
+    fi
+    oc logout > /dev/null
+    exit 1
+}
+
+function check-environment-variables {
+    missing=0
+    if [ -z "$USER_NAME" ]; then
+        echo "USER_NAME is missing";
+        missing=1
+    fi
+    if [ -z "$USER_PASSWORD" ]; then
+        echo "USER_PASSWD is missing";
+        missing=1
+    fi
+    if [ -z "$APP_NAME" ]; then
+        echo "APP_NAME is missing";
+        missing=1
+    fi
+    if [ -z "$APP_VERSION" ]; then
+        echo "APP_VERSION is missing";
+        missing=1
+    fi
+    if [ -z "$APP_GIT" ]; then
+        echo "APP_GIT is missing";
+        missing=1
+    fi
+    if [ -z "$APP_GIT_REF" ]; then
+        echo "APP_GIT_REF is missing";
+        missing=1
+    fi
+    if [ -z "$APP_GIT_CONTEXT_DIR" ]; then
+        echo "APP_GIT_CONTEXT_DIR is missing";
+        missing=1
+    fi
+    if [ -z "$OSE_PROJECT" ]; then
+        echo "OSE_PROJECT is missing";
+        missing=1
+    fi
+    if [ $missing -eq 1 ]; then
+        exit_with_error
+    fi
+}
+
+function prepare_app_version {
+    APP_VERSION=`echo ${APP_VERSION} | sed -r 's/ /_/g'`
+    echo ${APP_VERSION}
+}
+
+function check-app-name-length {
+    if [ ${#APP_NAME} -gt 24 -a -z "$CUSTOM_APP_NAME" ]; then
+        exit_with_error "name $APP_NAME is to long. Please supply other name with option -n <other_name>. Name must conform to: must be a DNS 952 label (at most 24 characters, matching regex [a-z]([-a-z0-9]*[a-z0-9])?)"
+    elif [ ${#APP_NAME} -gt 24 -a ${#CUSTOM_APP_NAME} -le 24 ]; then
+        APP_NAME=$CUSTOM_APP_NAME
+    elif [ ${#APP_NAME} -gt 24 -a ${#CUSTOM_APP_NAME} -gt 24 ]; then
+        exit_with_error "Name $CUSTOM_APP_NAME is to long. Please supply other name with option -n <other_name>. Name must conform to: must be a DNS 952 label (at most 24 characters, matching regex [a-z]([-a-z0-9]*[a-z0-9])?)"
+    fi
+    APP_NAME=$(echo "$APP_NAME" | sed "s/[0-9]*$//")
+}
+
+function create-new-app {
+    echo "Creating a new app"
+    oc new-app --template=$BUILD_TEMPLATE_NAME -p \
+    APPLICATION_NAME=$APP_NAME,GIT_URI=$APP_GIT,GIT_REF=$APP_GIT_REF,CONTEXT_DIR=$APP_GIT_CONTEXT_DIR,JVM_OPTIONS=$APP_JVM_OPTIONS,BAMBOO_USER=${BAMBOO_USERNAME} \
+    -e PROJECT_NAME=${BAMBOO_PROJECTNAME},BUILD_NUMBER=${APP_VERSION},USER=${BAMBOO_USERNAME},PASSWORD=${BAMBOO_PASSWORD},BAMBOO_HOST=${BAMBOO_HOST} \
+    -l name=$APP_NAME > /dev/null
+
+    echo "Finding build id"
+    BUILD_ID=`oc get builds | grep "$APP_NAME" | tail -1 | awk '{print $1}'`
+    rc=1
+    attempts=75
+    count=0
+    while [ $rc -ne 0 -a $count -lt $attempts ]; do
+        BUILD_ID=`oc get builds | grep "$APP_NAME" | tail -1 | awk '{print $1}'`
+        if [ -z "$BUILD_ID" ]; then
+            count=$(($count+1))
+            echo -n "."
+            sleep 5
+        else
+            rc=0
+            echo ""
+            echo "Build id is :" ${BUILD_ID}
+        fi
+    done
+
+    if [ $rc -ne 0 ]; then
+        exit_with_error "Fail: Build could not be found after maximum attempts"
+    fi
+}
+
+
+function build-new-version {
+    rc=0
+    IMAGE_ID=`oc get istag | grep "$APP_NAME:$APP_VERSION"| awk '{print $1}'`
+    if [ -z "$IMAGE_ID" ]; then
+        echo "New version of existing App ($APP_NAME). Triggering build build of version: $APP_VERSION"
+        BUILD_ID=`oc start-build ${BUILD_CONFIG} --commit="$APP_GIT_REF" -e=PROJECT_NAME="${BAMBOO_PROJECTNAME}",BUILD_NUMBER="${APP_VERSION}",USER=${BAMBOO_USERNAME},PASSWORD=${BAMBOO_PASSWORD},BAMBOO_HOST=${BAMBOO_HOST}`
+        ERR=$?
+        if [ $ERR -ne 0 ]; then
+            echo "Could not start build. Aborting."
+            exit $ERR
+        fi
+        rc=1
+    fi
+}
+
+function wait-for-build-to-start {
+    attempts=25
+    count=0
+    while [ $rc -ne 0 -a $count -lt $attempts ]; do
+      status=`oc get build ${BUILD_ID} --template '{{.status.phase}}'`
+      if [[ $status == "Failed" || $status == "Error" || $status == "Canceled" ]]; then
+        exit_with_error "Fail: Build completed with unsuccessful status: ${status}"
+      fi
+      if [ $status == "Complete" ]; then
+        echo ""
+        echo "Build completed, will tag and deploy next"
+        rc=0
+      fi
+
+      if [ $status == "Running" ]; then
+        echo "Build started"
+        rc=0
+      fi
+
+      if [ $status == "Pending" ]; then
+        count=$(($count+1))
+        echo -n "."
+        sleep 5
+      fi
+    done
+}
+
+function wait-for-build-to-finish {
+    count=0
+    attempts=200
+    while [ $rc -ne 0 -a $count -lt $attempts ]; do
+      status=`oc get build ${BUILD_ID} --template '{{.status.phase}}'`
+      if [[ $status == "Failed" || $status == "Error" || $status == "Cancelled" ]]; then
+        exit_with_error "Fail: Build completed with unsuccessful status: ${status}"
+      fi
+
+      if [ $status == "Complete" ]; then
+        echo ""
+        echo "Build completed successfully"
+        oc tag $APP_NAME:latest $APP_NAME:$APP_VERSION
+        echo "Build tagged as version $APP_VERSION"
+        rc=0
+      else
+        count=$(($count+1))
+        echo -n "."
+        sleep 5
+      fi
+    done
+}
+
+function wait-for-pod-to-run-and-pass-ready-state {
+    echo "Waiting for pod to run and pass readynessprobe"
+    LATEST_VERSION=`oc get dc/$APP_NAME --template='{{.status.latestVersion}}'`
+    POD_ID=`oc get pod -l deployment=$APP_NAME-$LATEST_VERSION | tail -1 | awk '{print $1}'`
+    count=0
+    attempts=75
+    echo "Waiting for deploy to start"
+    while [ -z "$POD_ID" -a $count -lt $attempts ]; do
+        POD_ID=`oc get pod -l deployment=$APP_NAME-$LATEST_VERSION | tail -1 | awk '{print $1}'`
+        count=$(($count+1))
+        if [ -z "$POD_ID" ]; then
+            sleep 1
+            echo -n "."
+        else
+            echo "."
+        fi
+    done
+    echo "Deployment started. Waiting for application to start"
+    rc=1
+    while [ $rc -ne 0 -a $count -lt $attempts ]; do
+        status=`oc get pod/$POD_ID --template='{{.status.phase}}'`
+        if [[ $status == "Failed" || $status == "Error" || $status == "Canceled" ]]; then
+            exit_with_error "Fail: Build completed with unsuccessful status: ${status}"
+        fi
+        if [ $status == "Running" ]; then
+            echo ""
+            echo "Pod is running. Waiting for pod to be ready"
+            rc=0
+        else
+            count=$(($count+1))
+            echo -n "."
+            sleep 5
+        fi
+    done
+    rc=1
+    while [ $rc -ne 0 -a $count -lt $attempts ]; do
+        status=`oc describe pod/$POD_ID | grep Ready: | awk '{print $2}'`
+        if [ "$status" == "True" ]; then
+            echo ""
+            echo "Deployment done and application ready"
+            rc=0
+        elif [ "$status" == *"not found"* ]; then
+            echo ""
+            exit_with_error "Fail: Pod no longer found. Possible error during startup of application"
+        else
+            count=$(($count+1))
+            echo -n "."
+            sleep 5
+        fi
+    done
+    if [ $rc -ne 0 ]; then
+        echo ""
+        exit_with_error "Fail: Pod not ready in a reasonable time. Exiting"
+    fi
+}
+
+
+function tag-for-is {
+    oc delete istag/$APP_NAME:$1 > /dev/null
+    oc tag $OSE_BUILD_PROJECT/$APP_NAME:$APP_VERSION $APP_NAME:$1
+    echo "Version $APP_VERSION of $APP_NAME deployed"
+}
+
+function set_active_profile_if_dc_exists {
+    DC_ID=`oc get dc | grep $APP_NAME | tail -1 | awk '{print $1}'`
+    echo "DC_ID: $DC_ID"
+    if [ -n "$DC_ID" ]; then
+        oc env dc/$DC_ID SPRING_PROFILES_ACTIVE=$OSE_PROJECT
+    else
+        echo "Could not set active spring profile"
+    fi
+}
+
+function add_name_label_to_imagestream_if_missing {
+    TAGGED_STREAM_NAME=`oc get is -l name=$APP_NAME | tail -1 | awk '{print $1}'`
+    if [ -z "$TAGGED_STREAM_NAME" ]; then
+        oc label is/$APP_NAME name=$APP_NAME
+    fi
+}
+
+function deploy {
+    CURRENTLY_DEPLOYED_SHA=`oc get istag $APP_NAME:${OSE_PROJECT}| tail -1 | awk '{print $NF}'`
+    VERSION_TO_BE_DEPLOYED_SHA=`oc get istag $APP_NAME:$APP_VERSION -n $OSE_BUILD_PROJECT| tail -1 | awk '{print $NF}'`
+    if [ "$CURRENTLY_DEPLOYED_SHA" == "$VERSION_TO_BE_DEPLOYED_SHA" ]; then
+        echo "Version already deployed. Starting redeploy"
+        DC_ID=`oc get dc | grep $APP_NAME | tail -1 | awk '{print $1}'`
+        oc deploy $DC_ID --latest
+    else
+        tag-for-is ${OSE_PROJECT}
+    fi
+}
+
+function add_extra_route {
+    EXISTING_ROUTE=`oc get route -l name=$APP_NAME | grep "-external" | awk '{print $2}'`
+    EXISTING_PATH=`oc get route -l name=$APP_NAME | grep "-external" | awk '{print $3}'`
+    if [ -n "$EXISTING_ROUTE" ]; then
+    if [ $EXTRA_ROUTE != $EXISTING_ROUTE -o $EXTRA_ROUTE_PATH != $EXISTING_PATH ]; then
+        echo "Route is updated. Dropping old route"
+        oc delete route "$APP_NAME-external"
+        EXISTING_ROUTE=""
+    fi
+    fi
+    if [ -n "$EXTRA_ROUTE" -a -z "$EXISTING_ROUTE" ]; then
+        oc new-app --template=$EXTERNAL_ROUTE_TEMPLATE -p \
+        SERVICE_NAME=$APP_NAME,SERVICE_HOSTNAME=${EXTRA_ROUTE},SERVICE_PATH=${EXTRA_ROUTE_PATH} \
+        -l name=$APP_NAME
+        echo "Additional route to service created. Route: $EXTRA_ROUTE$EXTRA_ROUTE_PATH"
+    fi
+}
+
+prepare_app_version
+check-environment-variables
+check-app-name-length
+APP_NAME=`echo $APP_NAME | awk '{print tolower($0)}'`
+oc login --insecure-skip-tls-verify=true -u$USER_NAME -p$USER_PASSWORD $OSE_HOST > /dev/null
+
+ERR=$?
+if [ $ERR -ne 0 ]; then
+  echo "Login failed! Aborting"
+  exit $ERR
+fi
+
+oc project $OSE_BUILD_PROJECT > /dev/null
+
+BUILD_CONFIG=`oc get bc $APP_NAME  -n ${OSE_BUILD_PROJECT} | grep "$APP_NAME" | tail -1 |awk '{print $1}'`
+echo "$BUILD_CONFIG"
+if [ -z "$BUILD_CONFIG" ]; then
+    create-new-app
+else
+    build-new-version
+fi
+
+echo "Waiting for build to start"
+wait-for-build-to-start
+rc=0
+new_build=0
+if [ -n "$BUILD_ID" ]; then
+    oc get build/$BUILD_ID
+    rc=1
+    new_build=1
+fi
+
+echo "Waiting for build to finnish"
+wait-for-build-to-finish
+if [ $new_build -eq 1 ]; then
+    oc logs build/$BUILD_ID
+fi
+
+if [ $rc -ne 0 ]; then
+    exit_with_error "Fail: Build did not complete in a reasonable period of time"
+else
+    if [ $OSE_PROJECT != $OSE_BUILD_PROJECT ]; then
+        oc project $OSE_PROJECT > /dev/null
+        DC_ID=`oc get dc | grep $APP_NAME | tail -1 | awk '{print $1}'`
+        if [ -z "$DC_ID" ]; then
+            echo "Creating project in environment"
+            oc new-app --template=$SPRING_IMAGE_TEMPLATE -p \
+                IMAGE_NAME=$APP_NAME,IMAGE_TAG=${OSE_PROJECT} \
+                -l name=$APP_NAME
+        fi
+        set_active_profile_if_dc_exists
+        deploy
+        add_extra_route
+        wait-for-pod-to-run-and-pass-ready-state
+    fi
+
+    add_name_label_to_imagestream_if_missing
+    oc logout
+fi

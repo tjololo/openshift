@@ -1,0 +1,196 @@
+{
+   "kind": "List",
+   "apiVersion": "v1",
+   "metadata": {
+      "name": "springboot-image"
+   },
+   "items": [
+      {
+         "kind": "Template",
+         "apiVersion": "v1",
+         "metadata": {
+            "name": "springboot-image",
+            "annotations": {
+               "description": "Deploy Spring Boot image",
+               "iconClass": "icon-jboss",
+               "tags": "instant-app,springboot,image,java"
+            }
+
+         },
+         "labels": {
+            "application": "springboot-image",
+            "createdBy": "springboot-image"
+         },
+         "parameters": [
+            {
+               "description": "The name for the image.",
+               "name": "IMAGE_NAME",
+               "displayName": "Image name",
+               "required": true
+            },
+            {
+               "description": "Tag you want the DeploymentConfig to listen to",
+               "name": "IMAGE_TAG",
+               "displayName": "Image tag",
+               "required": true
+            },
+            {
+               "description": "Custom hostname for service routes.  Leave blank for default hostname, e.g.: <application-name>.<project>.<default-domain-suffix>",
+               "name": "APPLICATION_HOSTNAME",
+               "displayName": "Application hostname"
+            }
+         ],
+         "objects": [
+            {
+               "kind": "DeploymentConfig",
+               "apiVersion": "v1",
+               "metadata": {
+                  "name": "${IMAGE_NAME}"
+               },
+               "spec": {
+                  "strategy": {
+                     "type": "Rolling",
+                     "rollingParams": {
+                        "updatePeriodSeconds": 1,
+                        "intervalSeconds": 1,
+                        "timeoutSeconds": 600
+                     },
+                     "resources": {}
+                  },
+                  "triggers": [
+                     {
+                        "type": "ConfigChange"
+                     },
+                     {
+                        "type": "ImageChange",
+                        "imageChangeParams": {
+                           "automatic": true,
+                           "containerNames": [
+                              "${IMAGE_NAME}"
+                           ],
+                           "from": {
+                              "kind": "ImageStreamTag",
+                              "name": "${IMAGE_NAME}:${IMAGE_TAG}"
+                           }
+                        }
+                     }
+                  ],
+                  "replicas": 1,
+                  "selector": {
+                     "deploymentconfig": "${IMAGE_NAME}"
+                  },
+                  "template": {
+                     "metadata": {
+                        "labels": {
+                           "deploymentconfig": "${IMAGE_NAME}"
+                        }
+                     },
+                     "spec": {
+                        "containers": [
+                           {
+                              "name": "${IMAGE_NAME}",
+                              "image": "${IMAGE_NAME}",
+                              "ports": [
+                                 {
+                                    "containerPort": 8080,
+                                    "protocol": "TCP"
+                                 },
+                                 {
+                                    "containerPort": 8181,
+                                    "protocol": "TCP"
+                                 }
+                              ],
+                              "livenessProbe": {
+                                 "tcpSocket": {
+                                    "port": 8080
+                                 },
+                                 "initialDelaySeconds": 30,
+                                 "timeoutSeconds": 5
+                              },
+                              "readinessProbe": {
+                                 "httpGet": {
+                                    "path": "/health",
+                                    "port": 8181
+                                 },
+                                 "initialDelaySeconds": 15,
+                                 "timeoutSeconds": 5
+                              },
+                              "resources": {},
+                              "terminationMessagePath": "/dev/termination-log",
+                              "imagePullPolicy": "IfNotPresent",
+                              "securityContext": {
+                                 "capabilities": {},
+                                 "privileged": false
+                              }
+                           }
+                        ],
+                        "restartPolicy": "Always",
+                        "dnsPolicy": "ClusterFirst"
+                     }
+                  }
+               }
+            },
+            {
+               "kind": "Route",
+               "apiVersion": "v1",
+               "metadata": {
+                  "name": "${IMAGE_NAME}"
+               },
+               "spec": {
+                  "host": "${APPLICATION_HOSTNAME}",
+                  "to": {
+                     "kind": "Service",
+                     "name": "${IMAGE_NAME}"
+                  },
+                  "port": {
+                     "targetPort": 8080
+                  }
+               }
+            },
+            {
+               "kind": "Route",
+               "apiVersion": "v1",
+               "metadata": {
+                  "name": "${IMAGE_NAME}-managment"
+               },
+               "spec": {
+                  "host": "${APPLICATION_HOSTNAME}",
+                  "to": {
+                     "kind": "Service",
+                     "name": "${IMAGE_NAME}"
+                  },
+                  "port": {
+                     "targetPort": 8181
+                  }
+               }
+            },
+            {
+               "kind": "Service",
+               "apiVersion": "v1",
+               "metadata": {
+                  "name": "${IMAGE_NAME}"
+               },
+               "spec": {
+                  "ports": [
+                     {
+                        "name": "${IMAGE_NAME}-http",
+                        "port": 8080,
+                        "targetPort": 8080
+                     },
+                     {
+                        "name": "${IMAGE_NAME}-managment",
+                        "port": 8181,
+                        "targetPort": 8181
+                     }
+                  ],
+                  "selector": {
+                     "deploymentconfig": "${IMAGE_NAME}"
+                  },
+                  "type": "ClusterIP",
+                  "sessionAffinity": "None"
+               }
+            }
+         ]
+      }
+   ]
+}

@@ -1,0 +1,68 @@
+{
+   "kind": "List",
+   "apiVersion": "v1",
+   "metadata": {
+      "name": "external-route"
+   },
+   "items": [
+      {
+         "kind": "Template",
+         "apiVersion": "v1",
+         "metadata": {
+            "name": "external-route",
+            "annotations": {
+               "description": "Add additional route for service",
+               "iconClass": "icon-jboss",
+               "tags": "route"
+            }
+
+         },
+         "labels": {
+            "application": "external-route",
+            "createdBy": "external-route"
+         },
+         "parameters": [
+            {
+               "description": "Service name",
+               "name": "SERVICE_NAME",
+               "displayName": "Service name",
+               "required": true
+            },
+            {
+               "description": "The host",
+               "name": "SERVICE_HOSTNAME",
+               "displayName": "Host",
+               "required": true
+            },
+            {
+               "description": "Path to add to host",
+               "name": "SERVICE_PATH",
+               "displayName": "Path"
+            }
+         ],
+         "objects": [
+            {
+               "kind": "Route",
+               "apiVersion": "v1",
+               "metadata": {
+                  "name": "${SERVICE_NAME}-external"
+               },
+               "labels": {
+                  "name": "${SERVICE_NAME}"
+               },
+               "spec": {
+                  "host": "${SERVICE_HOSTNAME}",
+                  "path": "${SERVICE_PATH}",
+                  "to": {
+                     "kind": "Service",
+                     "name": "${SERVICE_NAME}"
+                  },
+                  "port": {
+                     "targetPort": 8080
+                  }
+               }
+            }
+         ]
+      }
+   ]
+}

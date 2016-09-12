@@ -1,0 +1,356 @@
+{
+   "kind": "List",
+   "apiVersion": "v1",
+   "metadata": {
+      "name": "springboot-sti"
+   },
+   "items": [
+      {
+         "kind": "BuildConfig",
+         "apiVersion": "v1",
+         "metadata": {
+            "name": "springboot-sti"
+         },
+         "spec": {
+            "triggers": [
+               {
+                  "type": "GitHub",
+                  "github": {
+                     "secret": "secret"
+                  }
+               },
+               {
+                  "type": "Generic",
+                  "generic": {
+                     "secret": "secret"
+                  }
+               },
+               {
+                  "type": "ImageChange",
+                  "imageChange": {}
+               }
+            ],
+            "source": {
+               "type": "Git",
+               "git": {
+                  "uri": "<git-uri>",
+                  "ref": "master"
+               },
+               "contextDir": "springboot-sti"
+            },
+            "strategy": {
+               "type": "Docker",
+               "dockerStrategy": {
+                  "from": {
+                     "kind": "ImageStreamTag",
+                     "name": "rhel7:latest"
+                  }
+               }
+            },
+            "output": {
+               "to": {
+                  "kind": "ImageStreamTag",
+                  "name": "springboot-sti:latest"
+               }
+            },
+            "resources": {}
+         }
+      },
+      {
+         "kind": "ImageStream",
+         "apiVersion": "v1",
+         "metadata": {
+            "name": "rhel7"
+         },
+         "spec": {
+            "dockerImageRepository": "registry.access.redhat.com/rhel7:7.2"
+         }
+      },
+      {
+         "kind": "ImageStream",
+         "apiVersion": "v1",
+         "metadata": {
+            "name": "springboot-sti"
+         },
+         "spec": {
+            "dockerImageRepository": "",
+            "tags": [
+               {
+                  "name": "latest",
+                  "annotations": {
+                     "description": "Spring Boot STI image",
+                     "iconClass": "icon-jboss",
+                     "tags": "builder,springboot,java,maven,gradle",
+                     "supports": "springboot,java:8,maven:3,gradle:2.6",
+                     "version": "1.0"
+                  }
+               }
+            ]
+         }
+      },
+      {
+         "kind": "Template",
+         "apiVersion": "v1",
+         "metadata": {
+            "name": "springboot-maven",
+            "annotations": {
+               "description": "Source to Image for Spring Boot built with maven",
+               "iconClass": "icon-jboss",
+               "tags": "instant-app,springboot,maven,java"
+            }
+
+         },
+         "labels": {
+            "application": "springboot-maven",
+            "createdBy": "springboot-sti-maven"
+         },
+         "parameters": [
+            {
+               "description": "The name for the application.",
+               "name": "APPLICATION_NAME",
+               "value": "helloworld-mvn",
+               "displayName": "Application name",
+               "required": true
+            },
+            {
+               "description": "Custom hostname for service routes.  Leave blank for default hostname, e.g.: <application-name>.<project>.<default-domain-suffix>",
+               "name": "APPLICATION_HOSTNAME",
+               "displayName": "Application hostname"
+            },
+            {
+               "description": "Git source URI for application",
+               "name": "GIT_URI",
+			   "required": true
+            },
+            {
+               "description": "Git branch/tag reference",
+               "name": "GIT_REF",
+               "value": "master"
+            },
+            {
+               "description": "Git Directory",
+               "name": "CONTEXT_DIR"
+            },
+            {
+               "description": "Username to fetch artifacts with",
+               "name": "BAMBOO_USER"
+            },
+            {
+               "description": "Password to fetch artifacts with",
+               "name": "BAMBOO_PASSWORD",
+               "value": "secret"
+            },
+            {
+               "description": "Application options. These options will be passed to the Spring Boot command line",
+               "name": "APP_OPTIONS"
+            },
+			{
+               "description": "JVM options. These options will be passed to the JVM command line",
+               "name": "JVM_OPTIONS"
+            }
+         ],
+         "objects": [
+            {
+               "kind": "BuildConfig",
+               "apiVersion": "v1",
+               "metadata": {
+                  "name": "${APPLICATION_NAME}"
+               },
+			   "labels": {
+					"name": "${APPLICATION_NAME}"
+			   },
+               "spec": {
+                  "triggers": [
+                     {
+                        "type": "GitHub",
+                        "github": {
+                           "secret": "${GITHUB_TRIGGER_SECRET}"
+                        }
+                     },
+                     {
+                        "type": "Generic",
+                        "generic": {
+                           "secret": "${GENERIC_TRIGGER_SECRET}"
+                        }
+                     },
+                     {
+                        "type": "ImageChange",
+                        "imageChange": {}
+                     }
+                  ],
+                  "source": {
+                     "type": "Git",
+                     "git": {
+                        "uri": "${GIT_URI}",
+                        "ref": "${GIT_REF}"
+                     },
+                     "contextDir": "${CONTEXT_DIR}"
+                  },
+                  "strategy": {
+                     "type": "Source",
+                     "sourceStrategy": {
+                        "from": {
+                           "kind": "ImageStreamTag",
+                           "name": "springboot-sti:latest"
+                        }
+                     }
+                  },
+                  "output": {
+                     "to": {
+                        "kind": "ImageStreamTag",
+                        "name": "${APPLICATION_NAME}:latest"
+                     }
+                  },
+                  "resources": {}
+               }
+            },
+            {
+               "kind": "ImageStream",
+               "apiVersion": "v1",
+               "metadata": {
+                  "name": "${APPLICATION_NAME}"
+               },
+               "spec": {
+                  "dockerImageRepository": "",
+                  "tags": [
+                     {
+                        "name": "latest"
+                     }
+                  ]
+               }
+            }
+         ]
+      },
+      {
+         "kind": "Template",
+         "apiVersion": "v1",
+         "metadata": {
+            "name": "springboot-gradle",
+            "annotations": {
+               "description": "Source to Image for Spring Boot built with gradle",
+               "iconClass": "icon-jboss",
+               "tags": "instant-app,springboot,gradle,java"
+            }
+
+         },
+         "labels": {
+            "application": "springboot-gradle",
+            "createdBy": "springboot-sti-gradle"
+         },
+         "parameters": [
+            {
+               "description": "The name for the application.",
+               "name": "APPLICATION_NAME",
+               "value": "helloworld-gradle",
+               "displayName": "Application name",
+               "required": true
+            },
+            {
+               "description": "Custom hostname for service routes.  Leave blank for default hostname, e.g.: <application-name>.<project>.<default-domain-suffix>",
+               "name": "APPLICATION_HOSTNAME",
+               "displayName": "Application hostname"
+            },
+            {
+               "description": "Git source URI for application",
+               "name": "GIT_URI",
+               "required": true
+            },
+            {
+               "description": "Git branch/tag reference",
+               "name": "GIT_REF",
+               "value": "master"
+            },
+            {
+               "description": "Git Directory",
+               "name": "CONTEXT_DIR",
+               "value": ""
+            },
+            {
+               "description": "Username to fetch artifacts with",
+               "name": "BAMBOO_USER"
+            },
+            {
+               "description": "Password to fetch artifacts with",
+               "name": "BAMBOO_PASSWORD",
+               "value": "secret"
+            },
+			{
+               "description": "Application options. These options will be passed to the Spring Boot command line",
+               "name": "APP_OPTIONS"
+            },
+			{
+               "description": "JVM options. These options will be passed to the JVM command line",
+               "name": "JVM_OPTIONS"
+            }
+         ],
+         "objects": [
+            {
+               "kind": "BuildConfig",
+               "apiVersion": "v1",
+               "metadata": {
+                  "name": "${APPLICATION_NAME}"
+               },
+               "spec": {
+                  "triggers": [
+                     {
+                        "type": "GitHub",
+                        "github": {
+                           "secret": "${GITHUB_TRIGGER_SECRET}"
+                        }
+                     },
+                     {
+                        "type": "Generic",
+                        "generic": {
+                           "secret": "${GENERIC_TRIGGER_SECRET}"
+                        }
+                     },
+                     {
+                        "type": "ImageChange",
+                        "imageChange": {}
+                     }
+                  ],
+                  "source": {
+                     "type": "Git",
+                     "git": {
+                        "uri": "${GIT_URI}",
+                        "ref": "${GIT_REF}"
+                     },
+                     "contextDir": "${CONTEXT_DIR}"
+                  },
+                  "strategy": {
+                     "type": "Source",
+                     "sourceStrategy": {
+                        "from": {
+                           "kind": "ImageStreamTag",
+                           "name": "springboot-sti:latest"
+                        }
+                     }
+                  },
+                  "output": {
+                     "to": {
+                        "kind": "ImageStreamTag",
+                        "name": "${APPLICATION_NAME}:latest"
+                     }
+                  },
+                  "resources": {}
+               }
+            },
+            {
+               "kind": "ImageStream",
+               "apiVersion": "v1",
+               "metadata": {
+                  "name": "${APPLICATION_NAME}"
+               },
+               "spec": {
+                  "dockerImageRepository": "",
+                  "tags": [
+                     {
+                        "name": "latest"
+                     }
+                  ]
+               }
+            }
+         ]
+      }
+   ]
+}
