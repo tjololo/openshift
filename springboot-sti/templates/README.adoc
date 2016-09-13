@@ -1,10 +1,10 @@
-==external-route.json
+== external-route.json
 Template for creation of additional routes
 
-==springboot-image.json
+== springboot-image.json
 Template for use when promoting a image to a new namespace
 
-==springboot-sti.json
+== springboot-sti.json
 Template for use when building a source to image.
 This will not deploy the image since there are no deploymentconfig in this template.
 Use springboot-image to deploy the image this template generates.
